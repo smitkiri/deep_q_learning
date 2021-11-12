@@ -8,6 +8,7 @@ from scheduler import ExponentialSchedule
 from tqdm import trange
 import datetime
 import pickle
+import json
 import os
 
 from typing import List, Sequence, Union, Tuple
@@ -19,30 +20,30 @@ class CartPoleQAgent:
     def __init__(
             self, num_steps: int,
             gamma: float,
-            max_epsilon: float,
-            min_epsilon: float,
-            min_step_size: float,
-            max_step_size: float,
+            epsilon_range: Tuple[int, int],
+            step_size_range: Tuple[int, int],
             buckets: Sequence[int]
     ):
         """
         :param num_steps: The total number of steps for the agent to train
         :param gamma: Discount factor
-        :param max_epsilon: The epsilon value of e-greedy policy
-        :param min_step_size: The step size to update Q-values
+        :param epsilon_range: The epsilon value to begin and end with for the e-greedy policy
+        :param step_size_range: The step size to begin and end with to update Q-values
         :param buckets: The number of buckets for each value in the state - to convert the state to discrete
         """
         # Define the hyperparameters
         self.num_steps = num_steps
         self.gamma = gamma
-        self.max_epsilon = max_epsilon
-        self.min_epsilon = min_epsilon
-        self.min_step_size = min_step_size
-        self.max_step_size = max_step_size
+        self.epsilon_range = epsilon_range
+        self.step_size_range = step_size_range
 
         # Create schedulers
-        self.eps_scheduler = ExponentialSchedule(value_from=max_epsilon, value_to=min_epsilon, num_steps=num_steps)
-        self.alpha_scheduler = ExponentialSchedule(value_from=max_step_size, value_to=min_step_size, num_steps=num_steps)
+        self.eps_scheduler = ExponentialSchedule(
+            value_from=max(epsilon_range), value_to=min(epsilon_range), num_steps=num_steps
+        )
+        self.alpha_scheduler = ExponentialSchedule(
+            value_from=max(step_size_range), value_to=min(step_size_range), num_steps=num_steps
+        )
 
         # Define the environment and initialize the Q values + epsilon greedy policy
         self.env = gym.make("CartPole-v1")
@@ -100,19 +101,33 @@ class CartPoleQAgent:
             os.makedirs(output_dir)
 
         curr_datetime = datetime.datetime.now().strftime("%Y%m%d_%H%M")
-        output_filename = curr_datetime + "_qlearning_training_history.pickle"
-        output_path = os.path.join(output_dir, output_filename)
+        model_dir = os.path.join(output_dir, curr_datetime + "_qlearning")
+        os.mkdir(model_dir)
 
-        data_dump = {
+        model_path = os.path.join(model_dir, "model.pt")
+        params_path = os.path.join(model_dir, "params.json")
+
+        training_dump = {
             "q_values": dict(self.Q),
             "episode_lengths": self.episode_lengths,
-            "episode_returns": self.episode_returns
+            "episode_returns": self.episode_returns,
         }
 
-        with open(output_path, "wb") as f:
-            pickle.dump(data_dump, f)
+        with open(model_path, "wb") as f:
+            pickle.dump(training_dump, f)
 
-        return output_path
+        params = {
+            "num_steps": self.num_steps,
+            "gamma": self.gamma,
+            "epsilon_range": self.epsilon_range,
+            "step_size_range": self.step_size_range,
+            "buckets": self.num_buckets
+        }
+
+        with open(params_path, "w") as f:
+            json.dump(params, f)
+
+        return model_dir
 
     def run(self, output_dir: Union[str, os.PathLike] = None) -> None:
         """
@@ -179,7 +194,3 @@ class CartPoleQAgent:
         print(f"Training results saved at {dump_loc}")
 
         return
-
-
-
-
