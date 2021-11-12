@@ -1,4 +1,4 @@
-from agents import CartPoleQAgent, CartPoleDqnAgent
+from agents import CartPoleQAgent, CartPoleDqnAgent, CartPoleDoubleDqnAgent
 from plotting import plot_lengths_returns
 from argparse import ArgumentParser
 import sys
@@ -25,8 +25,12 @@ def parse_arguments(default=False):
     """Parse program arguments"""
     parser = ArgumentParser()
 
-    parser.add_argument("--q_learning", "-q", dest="run_q_learning", action="store_true", help="Run Q-Learning", default=default)
-    parser.add_argument("--dqn", "-d", dest="run_dqn", action="store_true", help="Run the DQN agent", default=default)
+    parser.add_argument("--q_learning", "-q", dest="run_q_learning", action="store_true",
+                        help="Run Q-Learning", default=default)
+    parser.add_argument("--dqn", "-d", dest="run_dqn", action="store_true",
+                        help="Run the DQN agent", default=default)
+    parser.add_argument("--ddqn", "-dd", dest="run_double_dqn", action="store_true",
+                        help="Run the Double DQN agent", default=default)
 
     args = parser.parse_args()
     return args
@@ -61,6 +65,21 @@ def main(args):
             smooth_line=True,
             window_size=100,
             output_file="plots/dqn_numerical_basic.png"
+        )
+
+    if args.run_double_dqn:
+        print("\n\nRunning Double DQN")
+
+        # Run the Double DQN Agent on numerical inputs
+        ddqn_agent = CartPoleDoubleDqnAgent(**DQN_PARAMS)
+        ddqn_agent.run()
+
+        plot_lengths_returns(
+            returns=ddqn_agent.episode_returns,
+            lengths=ddqn_agent.episode_lengths,
+            smooth_line=True,
+            window_size=100,
+            output_file="plots/double_dqn_numerical_basic.png"
         )
 
 
