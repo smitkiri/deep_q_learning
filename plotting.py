@@ -14,6 +14,9 @@ def _rolling_average(data, *, window_size):
     Returns:
         smooth_data: a 1-d numpy.array with the same size as data
     """
+    if not isinstance(data, np.ndarray):
+        data = np.array(data)
+
     assert data.ndim == 1
     kernel = np.ones(window_size)
     smooth_data = np.convolve(data, kernel) / np.convolve(
