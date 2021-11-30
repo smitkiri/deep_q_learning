@@ -1,6 +1,7 @@
 from scheduler import ExponentialSchedule
 from replay import ReplayMemory
-from networks import DQN
+from networks import DQN, DQNConvNet
+from plotting import plot_lengths_returns
 
 from typing import Tuple, Union
 import datetime
@@ -8,59 +9,69 @@ import json
 import tqdm
 import os
 
+from torchvision import transforms
 import torch.nn.functional as F
 import numpy as np
 import torch
 import gym
 
+import matplotlib.pyplot as plt
+from IPython import display
 
-class CartPoleDqnAgent:
-    """Agent for applying the Q-Learning algorithm on the CartPole environment"""
+
+class DQNAgent:
+    """Abstract class for DQN Agent Variants"""
 
     def __init__(
-            self, num_steps: int,
+            self, num_episodes: int,
             gamma: float,
             epsilon_range: Tuple[int, int],
-            replay_size: int,
-            replay_prepopulate_steps: int = 0,
-            batch_size: int = 64
+            eps_decay: float,
+            eps_num_steps: int,
+            batch_size: int,
+            target_update: int,
+            policy_update: int,
     ):
         """
-        :param num_steps: The total number of steps for the agent to train
+
+        :param num_episodes: The total number of steps for the agent to train
         :param gamma: Discount factor
         :param epsilon_range: The epsilon value to begin and end with for the e-greedy policy
-        :param replay_size: Maximum size of the replay memory
-        :param replay_prepopulate_steps: Number of steps with which to pre-populate the replay memory
         :param batch_size: Number of experiences in a batch
         """
         # Define the hyperparameters
-        self.num_steps = num_steps
+        self.num_episodes = num_episodes
         self.gamma = gamma
         self.epsilon_range = epsilon_range
         self.batch_size = batch_size
+        self.target_update = target_update
+        self.policy_update = policy_update
+        self.eps_decay = eps_decay
+        self.eps_num_steps = eps_num_steps
 
         # Create schedulers
         self.eps_scheduler = ExponentialSchedule(
-            value_from=max(epsilon_range), value_to=min(epsilon_range), num_steps=num_steps
+            value_from=max(epsilon_range), value_to=min(epsilon_range), eps_decay=eps_decay, num_steps=eps_num_steps
         )
 
-        # Define the environment and initialize the Q values + epsilon greedy policy
+        # Define the environment and set convergence length
         self.env = gym.make("CartPole-v1")
+        self.converge_len = 495
 
-        # get the state_size from the environment
-        state_size = self.env.observation_space.shape[0]
+        # Models and Replay Memory
+        self.dqn_model = None
+        self.dqn_target = None
+        self.optimizer = None
+        self.loss_fn = None
 
-        # initialize the DQN and DQN-target models
-        self.dqn_model = DQN(state_size, self.env.action_space.n)
-        self.dqn_target = DQN.custom_load(self.dqn_model.custom_dump())
+        self.memory = None
+        self.replay_prepopulate_steps = None
 
-        # initialize the optimizer
-        self.optimizer = torch.optim.Adam(self.dqn_model.parameters())
+        # Image transformation
+        self.resize_transform = None
 
-        # initialize the replay memory and pre-populate it
-        self.memory = ReplayMemory(replay_size, state_size)
-        self.memory.populate(self.env, replay_prepopulate_steps)
-        self.replay_prepopulate_steps = replay_prepopulate_steps
+        # Select pyTorch device
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Flag to indicate if the agent is trained
         self.is_trained = False
@@ -70,11 +81,12 @@ class CartPoleDqnAgent:
         self.episode_lengths = None
         self.step_losses = None
 
-    def save_trained_results(self, output_dir: Union[str, os.PathLike] = None) -> str:
+    def save_trained_results(self, output_dir: Union[str, os.PathLike] = None, model_name: str = "dqn_model") -> str:
         """
         Saves the trained results
 
         :param output_dir:
+        :param model_name:
         :return: Output file name
         """
         if output_dir is None:
@@ -84,7 +96,7 @@ class CartPoleDqnAgent:
             os.makedirs(output_dir)
 
         curr_datetime = datetime.datetime.now().strftime("%Y%m%d_%H%M")
-        model_dir = os.path.join(output_dir, curr_datetime + "_dqn_model")
+        model_dir = os.path.join(output_dir, curr_datetime + "_" + model_name)
         os.mkdir(model_dir)
 
         model_path = os.path.join(model_dir, "model.pt")
@@ -94,9 +106,11 @@ class CartPoleDqnAgent:
         torch.save(model_dump, model_path)
 
         params = {
-            "num_steps": self.num_steps,
+            "num_steps": self.num_episodes,
             "gamma": self.gamma,
             "epsilon_range": self.epsilon_range,
+            "eps_decay": self.eps_decay,
+            "eps_num_steps": self.eps_num_steps,
             "replay_size": self.memory.max_size,
             "replay_prepopulate_steps": self.replay_prepopulate_steps,
             "batch_size": self.batch_size
@@ -105,37 +119,288 @@ class CartPoleDqnAgent:
         with open(params_path, "w") as f:
             json.dump(params, f)
 
+        plot_lengths_returns(self.episode_returns, self.episode_lengths, smooth_line=True,
+                             output_file=os.path.join(model_dir, "plot.png"))
+
         return model_dir
 
-    @staticmethod
-    def train_dqn_batch(optimizer, batch, dqn_model, dqn_target, gamma) -> float:
+
+class CartPoleDqnAgent(DQNAgent):
+    """Agent for applying the Q-Learning algorithm on the CartPole environment"""
+
+    def __init__(self, input_type: str, **kwargs):
+        """
+        Initialize the CartPole DQN agent
+
+        :param input_type: The type of input for the neural network. "image" or "vector".
+        :param **kwargs: Arguments to initialize the vector agent or the image agent.
+        """
+        try:
+            super(CartPoleDqnAgent, self).__init__(
+                num_episodes=kwargs.pop("num_episodes"),
+                gamma=kwargs.pop("gamma"),
+                epsilon_range=kwargs.pop("epsilon_range"),
+                eps_decay=kwargs.pop("eps_decay", None),
+                eps_num_steps=kwargs.pop("eps_num_steps", None),
+                batch_size=kwargs.pop("batch_size"),
+                target_update=kwargs.pop("target_update"),
+                policy_update=kwargs.pop("policy_update")
+            )
+
+            replay_size = kwargs.pop("replay_size")
+            replay_prepopulate_steps = kwargs.pop("replay_prepopulate_steps")
+            self.input_type = input_type.lower()
+
+            if input_type.lower() == "vector":
+                self.init_vector_agent(
+                    replay_size=replay_size,
+                    replay_prepopulate_steps=replay_prepopulate_steps,
+                    **kwargs
+                )
+
+            elif input_type.lower() == "image":
+                self.init_image_agent(
+                    replay_size=replay_size,
+                    replay_prepopulate_steps=replay_prepopulate_steps,
+                    **kwargs
+                )
+
+            else:
+                msg = "The input type could be 'image' or 'vector'."
+                raise ValueError(msg)
+
+        except KeyError as missing_arg:
+            msg = f"{missing_arg} parameter missing."
+            raise KeyError(msg)
+
+    def init_vector_agent(
+            self, replay_size: int,
+            replay_prepopulate_steps: int = 0,
+            **kwargs
+    ):
+        """
+        Initializes the agent to work with vector data
+
+        :param replay_size: Maximum size of the replay memory
+        :param replay_prepopulate_steps: Number of steps with which to pre-populate the replay memory
+        :param kwargs: Additional parameters for initializing the Neural Network
+        """
+        # get the state_size from the environment
+        state_size = self.env.observation_space.shape[0]
+
+        # initialize the DQN and DQN-target models
+        self.dqn_model = DQN(state_size, self.env.action_space.n, **kwargs).to(self.device)
+        self.dqn_target = DQN.custom_load(self.dqn_model.custom_dump()).to(self.device)
+
+        # initialize the optimizer
+        self.optimizer = torch.optim.Adam(self.dqn_model.parameters())
+        self.lr_scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, 100_000, 0.5)
+        self.loss_fn = "mse"
+
+        # initialize the replay memory and pre-populate it
+        self.memory = ReplayMemory(replay_size)
+        self.populate_memory(replay_prepopulate_steps)
+        self.replay_prepopulate_steps = replay_prepopulate_steps
+
+    def init_image_agent(
+            self,
+            replay_size: int,
+            replay_prepopulate_steps: int = 0,
+            **kwargs
+    ):
+        """
+        Initializes the agent to work with image data
+
+        :param replay_size: Maximum size of the replay memory
+        :param replay_prepopulate_steps: Number of steps with which to pre-populate the replay memory
+        :param kwargs: Additional parameters for initializing the Neural Network
+        """
+        self.env.reset()
+
+        # Transformation for image input
+        self.resize_transform = transforms.Compose([
+            transforms.ToPILImage(),
+            transforms.Resize(size=40, interpolation=transforms.InterpolationMode.BICUBIC),
+            transforms.ToTensor()
+        ])
+
+        init_screen = self.get_screen()
+        _, screen_channels, screen_height, screen_width = init_screen.shape
+
+        # Initialize the policy and target DQN models
+        self.dqn_model = DQNConvNet(height=screen_height, width=screen_width, channels=screen_channels,
+                                    action_dim=self.env.action_space.n, **kwargs).to(self.device)
+        self.dqn_target = DQNConvNet.custom_load(self.dqn_model.custom_dump()).to(self.device)
+        self.dqn_target.eval()
+
+        # Initialize the optimizer
+        self.optimizer = torch.optim.Adam(self.dqn_model.parameters())
+        self.lr_scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, 25_000, 0.5)
+        self.loss_fn = "smooth_l1_loss"
+
+        # Initialize the replay memory and pre-populate it
+        self.memory = ReplayMemory(replay_size)
+        self.populate_memory(replay_prepopulate_steps)
+
+    def get_cart_location(self, screen_width: int) -> int:
+        """
+        Gets the cart location based on the screen width (the dimension of the rendered image)
+
+        :param screen_width: The width of the screen
+        :return: The cart location relative to the screen width
+        """
+        # The world is such that 0 is at the center
+        world_width = self.env.x_threshold * 2
+        scale = screen_width / world_width
+        cart_location = int(scale * self.env.state[0] + (screen_width / 2))
+        return cart_location
+
+    def get_screen(self) -> torch.Tensor:
+        """
+        Gets the screen pixels in a torch.Tensor format with a batch dimension added
+
+        :return: (1, Channel, Height, Width) shaped tensor
+        """
+        # Get the rendered screen and transform it to (C, H, W) order
+        screen = self.env.render(mode="rgb_array").transpose((2, 0, 1))
+
+        # Remove the top and bottom of the screen
+        _, height, width = screen.shape
+        screen = screen[:, int(height * 0.4):int(height * 0.8)]
+
+        # Remove 40% of the edges so we have a centered image of the cart
+        view_width = int(width * 0.6)
+        cart_location = self.get_cart_location(width)
+
+        if cart_location < view_width // 2:
+            slice_range = slice(view_width)
+        elif cart_location > width - view_width // 2:
+            slice_range = slice(-view_width, None)
+        else:
+            slice_range = slice(cart_location - view_width // 2, cart_location + view_width // 2)
+
+        screen = screen[:, :, slice_range]
+
+        # Scale the matrix and convert to torch tensor
+        screen = np.ascontiguousarray(screen, dtype=np.float32) / 255
+        screen = torch.from_numpy(screen)
+
+        # Resize the image and add a batch dimension
+        screen = self.resize_transform(screen).unsqueeze(0)
+        screen = screen.to(self.device)
+
+        return screen
+
+    def reset_env(self):
+        """
+        Resets the current environment
+
+        :return: The state tensor
+        """
+        if self.input_type == "vector":
+            state = self.env.reset()
+            state = torch.tensor(state, dtype=torch.float, device=self.device).unsqueeze(0)
+            last_screen = None
+            curr_screen = None
+        else:
+            self.env.reset()
+            last_screen = self.get_screen()
+            curr_screen = self.get_screen()
+            state = curr_screen - last_screen
+
+        return state, last_screen, curr_screen
+
+    def take_env_step(self, action, last_screen=None, curr_screen=None):
+        """
+        Take a step in the environment
+
+        :return: next_state, reward, done, last_screen, curr_screen
+        """
+        if self.input_type == "vector":
+            next_state, reward, done, _ = self.env.step(action)
+            next_state = torch.tensor(next_state, dtype=torch.float, device=self.device).unsqueeze(0)
+
+        else:
+            _, reward, done, _ = self.env.step(action)
+
+            last_screen = curr_screen
+            curr_screen = self.get_screen()
+
+            if not done:
+                next_state = curr_screen - last_screen
+            else:
+                next_state = None
+
+        reward = torch.tensor([reward], device=self.device)
+        done = torch.tensor([done], device=self.device)
+
+        return next_state, reward, done, last_screen, curr_screen
+
+    def populate_memory(self, num_steps):
+        """Populate this replay memory with `num_steps` from the random policy.
+
+        :param num_steps:  Number of steps to populate the memory with
+        """
+        # Run a random policy for `num_steps` time-steps and
+        # populate the replay memory with the resulting transitions.
+        state, last_screen, curr_screen = self.reset_env()
+
+        for _ in range(num_steps):
+            action = self.env.action_space.sample()
+            next_state, reward, done, last_screen, curr_screen = self.take_env_step(action, last_screen, curr_screen)
+            action = torch.tensor([action], device=self.device)
+
+            self.memory.add(state, action, reward, next_state, done)
+
+            # Reset the states if the current episode is done
+            if done:
+                state, last_screen, curr_screen = self.reset_env()
+            else:
+                state = next_state
+
+    def train_dqn_batch(self, batch) -> float:
         """Perform a single batch-update step on the given DQN model.
 
-        :param optimizer: nn.optim.Optimizer instance.
         :param batch:  Batch of experiences (class defined earlier).
-        :param dqn_model:  The DQN model to be trained.
-        :param dqn_target:  The target DQN model, ~NOT~ to be trained.
-        :param gamma:  The discount factor.
         :rtype: float  The scalar loss associated with this batch.
         """
         # compute the values and target_values tensors using the
         # given models and the batch of data.
-        values = dqn_model(batch.states)
+
+        def convert_to_tensor(value: Union[Tuple[torch.Tensor], torch.Tensor], unsqueeze_dim: int = None) -> torch.Tensor:
+            """Converts a batch value to tensor if not already"""
+            if not isinstance(value, torch.Tensor):
+                value = torch.cat(value)
+
+            if unsqueeze_dim is not None:
+                value = value.unsqueeze(unsqueeze_dim)
+
+            return value
+
+        states_batch = convert_to_tensor(batch.states)
+        actions_batch = convert_to_tensor(batch.actions, unsqueeze_dim=1)
+        rewards_batch = convert_to_tensor(batch.rewards, unsqueeze_dim=1)
+        dones_batch = convert_to_tensor(batch.dones, unsqueeze_dim=1)
+        next_states_batch = batch.next_states
+
+        # Get the policy network predictions
+        values = self.dqn_model(states_batch)
+        values = values.to(self.device)
 
         # Get the values for the specific action in batch.actions
-        values = values.gather(1, batch.actions)
+        values = values.gather(1, actions_batch)
 
         # Get the list of all non-final next states
-        non_final_next_states = torch.stack([batch.next_states[idx] for idx in range(len(batch.next_states))
-                                             if not batch.dones[idx]])
+        non_final_next_states = torch.cat([next_states_batch[idx] for idx in range(len(next_states_batch))
+                                           if not batch.dones[idx]])
 
         # Get the Q-values for each action from the target network
-        target_preds = dqn_target(non_final_next_states)
+        target_preds = self.dqn_target(non_final_next_states)
 
         # Set the target values of final states to 0 and fill in all the other non-final values
-        target_values = torch.zeros(batch.rewards.shape)
-        target_values[~batch.dones] = torch.max(target_preds, dim=1)[0].detach()
-        target_values = batch.rewards + gamma * target_values
+        target_values = torch.zeros(rewards_batch.shape, device=self.device)
+        target_values[~dones_batch] = torch.max(target_preds, dim=1)[0].detach()
+        target_values = rewards_batch + self.gamma * target_values
 
         assert (
                 values.shape == target_values.shape
@@ -149,87 +414,132 @@ class CartPoleDqnAgent:
         ), 'target_values tensor should require gradients'
 
         # computing the scalar MSE loss between computed values and the TD-target
-        loss = F.mse_loss(values, target_values)
+        if self.loss_fn == "mse":
+            loss = F.mse_loss(values, target_values)
+        elif self.loss_fn == "smooth_l1_loss":
+            loss = F.smooth_l1_loss(values, target_values)
+        else:
+            msg = f"loss_fn argument should either be 'mse' or 'smooth_l1_loss'."
+            raise ValueError(msg)
 
-        optimizer.zero_grad()  # reset all previous gradients
-        loss.backward()  # compute new gradients
-        optimizer.step()  # perform one gradient descent step
+        # reset all previous gradients
+        self.optimizer.zero_grad()
+
+        # compute new gradients
+        loss.backward()
+
+        # Perform gradient clipping
+        for param in self.dqn_model.parameters():
+            param.grad.data.clamp_(-1, 1)
+
+        # perform one gradient descent step
+        self.optimizer.step()
+        self.lr_scheduler.step()
 
         return loss.item()
+
+    def select_action(self, state: torch.Tensor, eps: float) -> torch.Tensor:
+        """
+        Selects an e-greedy action to take.
+        """
+        if np.random.random() < eps:
+            action = self.env.action_space.sample()
+            action = torch.tensor([action], device=self.device)
+        else:
+            with torch.no_grad():
+                action_tensor = self.dqn_model(state)
+                _, action = torch.max(action_tensor, dim=1)
+
+        return action
 
     def run(self, output_dir: Union[str, os.PathLike] = None) -> None:
         """
         Run the DQN Agent
         """
         # initiate lists to store returns, lengths and losses
-        rewards = []
         returns = []
         lengths = []
         losses = []
 
-        episode_num = 0
-        episode_time_step = 0
+        t_total = 0
         loss = 0
-
-        state = self.env.reset()  # initialize state of first episode
+        img = None
 
         # iterate for a total of `num_steps` steps
-        pbar = tqdm.trange(self.num_steps)
-        for t_total in pbar:
-            #  * sample an action from the DQN using epsilon-greedy
-            #  * use the action to advance the environment by one step
-            #  * store the transition into the replay memory
-            eps = self.eps_scheduler.value(t_total)
+        pbar = tqdm.trange(self.num_episodes)
+        for episode_num in pbar:
+            # initialize state of first episode
+            state, last_screen, curr_screen = self.reset_env()
 
-            if np.random.random() < eps:
-                action = self.env.action_space.sample()
-            else:
-                action_tensor = self.dqn_model(torch.from_numpy(state).unsqueeze(0))
-                _, action = torch.max(action_tensor, dim=1)
-                action = action.item()
+            # if episode_num == 0:
+            #     img = plt.imshow(curr_screen.cpu().squeeze(0).permute(1, 2, 0).numpy(), interpolation='none')
+            # else:
+            #     img.set_data(curr_screen.cpu().squeeze(0).permute(1, 2, 0).numpy())
+            #     display.display(plt.gcf())
+            #     display.clear_output(wait=True)
 
-            next_state, reward, done, _ = self.env.step(action)
-            self.memory.add(state, action, reward, next_state, done)
-            state = next_state
+            episode_time_step = 0
+            avg_len = 0
+            rewards = []
+            eps = self.eps_scheduler.value(episode_num)
 
-            rewards.append(reward)
+            while True:
+                #  * sample an action from the DQN using epsilon-greedy
+                #  * use the action to advance the environment by one step
+                #  * store the transition into the replay memory
+                action = self.select_action(state, eps)
 
-            # Once every 4 steps, sample a batch from the replay memory and perform a batch update
-            if t_total % 4 == 0:
-                batch = self.memory.sample(self.batch_size)
-                loss = CartPoleDqnAgent.train_dqn_batch(self.optimizer, batch, self.dqn_model,
-                                                        self.dqn_target, self.gamma)
-
-            losses.append(loss)
-
-            # Once every 10_000 steps, update the target network
-            if t_total % 10_000 == 0:
-                state_dict = self.dqn_model.state_dict()
-                self.dqn_target.load_state_dict(state_dict)
-
-            if done:
-                # Calculate the episode return
-                episode_return = 0
-                for r in rewards[::-1]:
-                    episode_return = r + self.gamma * episode_return
-
-                returns.append(episode_return)
-                lengths.append(episode_time_step)
-
-                # Update the progress bar
-                pbar.set_description(
-                    f'Episode: {episode_num} | Steps: {episode_time_step + 1} | Return:'
-                    f' {episode_return:5.2f} | Epsilon: {eps:4.2f}'
+                next_state, reward, done, last_screen, curr_screen = self.take_env_step(
+                    action.item(), last_screen, curr_screen
                 )
 
-                # Reset variables
-                episode_num += 1
-                episode_time_step = 0
-                rewards = []
-                state = self.env.reset()
+                # img.set_data(curr_screen.cpu().squeeze(0).permute(1, 2, 0).numpy())
+                # display.display(plt.gcf())
+                # display.clear_output(wait=True)
 
-            else:
-                episode_time_step += 1
+                self.memory.add(state, action, reward, next_state, done)
+                state = next_state
+                t_total += 1
+
+                # Sample a batch from the replay memory and perform a batch update
+                if t_total % self.policy_update == 0:
+                    batch = self.memory.sample(self.batch_size)
+                    loss = self.train_dqn_batch(batch)
+
+                losses.append(loss)
+                rewards.append(reward.item())
+
+                # Update the target network
+                if t_total % self.target_update == 0:
+                    state_dict = self.dqn_model.state_dict()
+                    self.dqn_target.load_state_dict(state_dict)
+                    self.dqn_target.to(self.device)
+
+                if done:
+                    # Calculate the episode return
+                    episode_return = 0
+                    for r in rewards[::-1]:
+                        episode_return = r + self.gamma * episode_return
+
+                    returns.append(episode_return)
+                    lengths.append(episode_time_step)
+
+                    if episode_num > 100:
+                        avg_len = round(np.mean(lengths[-100:]))
+
+                    # Update the progress bar
+                    pbar.set_description(
+                        f'Episode: {episode_num} | Steps: {episode_time_step + 1} | Return:'
+                        f' {episode_return:5.2f} | Epsilon: {eps:4.2f} | Avg len: {avg_len}'
+                    )
+                    break
+
+                else:
+                    episode_time_step += 1
+
+            if avg_len >= self.converge_len:
+                print(f"The model converged in {episode_num} episodes.")
+                break
 
         self.episode_lengths = np.array(lengths)
         self.episode_returns = np.array(returns)
@@ -238,7 +548,7 @@ class CartPoleDqnAgent:
         self.is_trained = True
 
         # Save the model
-        dump_loc = self.save_trained_results(output_dir)
+        dump_loc = self.save_trained_results(output_dir, "dqn_model_" + self.input_type)
         print(f"Training results saved at {dump_loc}")
 
         return
