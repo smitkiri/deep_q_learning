@@ -4,6 +4,7 @@ import math
 import gym
 
 from agents._policy import create_epsilon_policy
+from plotting import plot_lengths_returns
 from scheduler import ExponentialSchedule
 from tqdm import trange
 import datetime
@@ -126,6 +127,9 @@ class CartPoleQAgent:
 
         with open(params_path, "w") as f:
             json.dump(params, f)
+
+        plot_lengths_returns(self.episode_returns, self.episode_lengths, smooth_line=True,
+                             output_file=os.path.join(model_dir, "plot.png"))
 
         return model_dir
 
