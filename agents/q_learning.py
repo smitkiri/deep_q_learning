@@ -68,6 +68,33 @@ class CartPoleQAgent:
         self.episode_returns = None
         self.episode_lengths = None
 
+    @classmethod
+    def load_model(cls, model_dir: Union[str, os.PathLike], test_model: bool = True):
+        """Loads a pre-trained model"""
+        params_file = os.path.join(model_dir, "params.json")
+        model_file = os.path.join(model_dir, "model.pt")
+
+        with open(params_file, "r") as f:
+            params = json.load(f)
+
+        agent = cls(**params)
+
+        with open(model_file, "rb") as f:
+            model_data = pickle.load(f)
+
+        agent.Q = model_data["q_values"]
+
+        if test_model:
+            eps_scheduler = ExponentialSchedule(0, 0, num_steps=1)
+            agent.policy = create_epsilon_policy(agent.Q, epsilon_scheduler=eps_scheduler)
+        else:
+            agent.policy = create_epsilon_policy(agent.Q, epsilon_scheduler=agent.eps_scheduler)
+
+        agent.episode_returns = model_data["episode_returns"]
+        agent.episode_lengths = model_data["episode_lengths"]
+
+        return agent
+
     def get_discrete_state(self, state: List[float]) -> Tuple[int]:
         """
         Converts the continuous state to a discrete one
@@ -132,6 +159,35 @@ class CartPoleQAgent:
                              output_file=os.path.join(model_dir, "plot.png"))
 
         return model_dir
+
+    def test_model(self, n_episodes: int = 1_000, seed: int = 0) -> List[int]:
+        """Test the DQN model on random episode initializations and return the number
+        of time steps in each episode
+        """
+        self.env = gym.make("CartPole-v1")
+        self.env.seed(seed)
+
+        time_step_hist = []
+
+        for _ in trange(n_episodes, desc="Episode"):
+            curr_time_step = 0
+            state = self.env.reset()
+            state = self.get_discrete_state(state)
+
+            while True:
+                action = self.policy(state, 1)
+
+                next_state, reward, done, _ = self.env.step(action)
+                next_state = self.get_discrete_state(next_state)
+
+                state = next_state
+                curr_time_step += 1
+
+                if done:
+                    time_step_hist.append(curr_time_step)
+                    break
+
+        return time_step_hist
 
     def run(self, output_dir: Union[str, os.PathLike] = None) -> None:
         """
