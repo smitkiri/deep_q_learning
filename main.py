@@ -1,6 +1,5 @@
 from agents import (CartPoleQAgent, CartPoleDqnAgent, CartPoleDoubleDqnAgent,
                     CartPoleDuelingDqnAgent, CartPoleNoisyDqnAgent)
-from plotting import plot_lengths_returns
 from argparse import ArgumentParser
 import sys
 
@@ -14,15 +13,18 @@ Q_LEARNING_PARAMS = {
 
 DQN_VECTOR_PARAMS = {
     "input_type": "vector",
-    "num_episodes": 15_000,
+    "num_episodes": 10_000,
     "gamma": 0.99,
-    "epsilon_range": (1, 0.1),
-    "eps_decay": 0.9998,
+    "epsilon_range": (1, 0.05),
+    "eps_num_steps": 9_000,
     "replay_size": 200_000,
     "replay_prepopulate_steps": 50_000,
-    "batch_size": 64,
+    "batch_size": 256,
     "target_update": 10_000,
-    "policy_update": 4
+    "policy_update": 4,
+    "learning_rate": 1e-3,
+    "step_lr_params": (10_000, 0.9),
+    "num_layers": 3,
 }
 
 DQN_IMAGE_PARAMS = {
@@ -35,19 +37,24 @@ DQN_IMAGE_PARAMS = {
     "replay_prepopulate_steps": 50_000,
     "batch_size": 128,
     "target_update": 1000,
-    "policy_update": 4
+    "policy_update": 4,
+    "learning_rate": 1e-3,
+    "step_lr_params": (25_000, 0.5),
+    "center_image": True
 }
 
 
 NOISY_DQN_VECTOR_PARAMS = {
     "input_type": "vector",
-    "num_episodes": 1_000,
+    "num_episodes": 2_000,
     "gamma": 0.99,
     "replay_size": 200_000,
-    "replay_prepopulate_steps": 5_000,
-    "batch_size": 64,
-    "target_update": 1_000,
-    "policy_update": 4
+    "replay_prepopulate_steps": 50_000,
+    "batch_size": 256,
+    "target_update": 3_000,
+    "policy_update": 4,
+    "learning_rate": 1e-3,
+    "step_lr_params": (10_000, 0.9)
 }
 
 NOISY_DQN_IMAGE_PARAMS = {
@@ -58,7 +65,10 @@ NOISY_DQN_IMAGE_PARAMS = {
     "replay_prepopulate_steps": 5_000,
     "batch_size": 64,
     "target_update": 1_000,
-    "policy_update": 4
+    "policy_update": 4,
+    "learning_rate": 1e-4,
+    "step_lr_params": None,
+    "center_image": True
 }
 
 
