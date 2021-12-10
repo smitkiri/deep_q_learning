@@ -4,7 +4,7 @@ import torch.nn as nn
 
 class DuelingDQNConvNet(nn.Module):
     def __init__(self, height, width, channels, action_dim, *, num_conv_layers=3, hidden_dim=128,
-                 kernel_size=(3, 3), stride=(2, 2)):
+                 kernel_size=(3, 3), stride=(2, 2), **kwargs):
         """
         DQN PyTorch Model with Convolutional Neural Networks
 

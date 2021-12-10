@@ -63,7 +63,7 @@ class NoisyLinear(nn.Module):
 
 
 class NoisyDQN(nn.Module):
-    def __init__(self, state_dim, action_dim, *, num_layers=2, hidden_dim=128):
+    def __init__(self, state_dim, action_dim, *, num_layers=2, hidden_dim=128, **kwargs):
         """Noisy Deep Q-Network  PyTorch model.
 
         Args:

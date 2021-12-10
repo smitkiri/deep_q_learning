@@ -4,7 +4,7 @@ import torch
 
 
 class DQN(nn.Module):
-    def __init__(self, state_dim, action_dim, *, num_layers=3, hidden_dim=256):
+    def __init__(self, state_dim, action_dim, *, num_layers=3, hidden_dim=256, **kwargs):
         """Deep Q-Network  PyTorch model.
 
         Args:
