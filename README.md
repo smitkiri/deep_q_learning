@@ -21,8 +21,8 @@ After a lot of experiments, the following hyperparameter combination produced th
 | Parameters | DQN | Double DQN | Dueling DQN | NoisyNet DQN |
 |:---:|:---:|:---:|:---:|:---:|
 | Discount factor | 0.99 | 0.99 | 0.99 | 0.99 | 
-| $$\epsilon$$-range | 1 - 0.05 | 1 - 0.05 | 1 - 0.05 | - |
-| $$\epsilon$$-decay rate | 0.99963 | 0.99963 | 0.99970 | - |
+| ![formula](https://render.githubusercontent.com/render/math?math=\color{grey}\epsilon) -range | 1 - 0.05 | 1 - 0.05 | 1 - 0.05 | - |
+| ![formula](https://render.githubusercontent.com/render/math?math=\color{grey}\epsilon) -decay rate | 0.99963 | 0.99963 | 0.99970 | - |
 | Replay Size | 200,000 | 200,000 | 200,000 | 200,000 |
 | Batch Size | 256 | 256 | 256 | 256 | 
 | Target Update Steps | 10,000 | 10,000 | 10,000 | 3,000 |
@@ -35,8 +35,8 @@ After a lot of experiments, the following hyperparameter combination produced th
 | Parameters | DQN | Double DQN | Dueling DQN | NoisyNet DQN |
 |:---:|:---:|:---:|:---:|:---:|
 | Discount factor | 0.99 | 0.99 | 0.99 | 0.99 | 
-| $$\epsilon$$-range | 1 - 0.05 | 1 - 0.05 | 1 - 0.05 | - |
-| $$\epsilon$$-decay rate | 0.99984 | 0.99984 | 0.99984 | - |
+| ![formula](https://render.githubusercontent.com/render/math?math=\color{grey}\epsilon) -range | 1 - 0.05 | 1 - 0.05 | 1 - 0.05 | - |
+| ![formula](https://render.githubusercontent.com/render/math?math=\color{grey}\epsilon) -decay rate | 0.99984 | 0.99984 | 0.99984 | - |
 | Replay Size | 200,000 | 200,000 | 200,000 | 200,000 |
 | Batch Size | 256 | 256 | 256 | 256 | 
 | Target Update Steps | 10,000 | 10,000 | 10,000 | 10,000 |
@@ -93,7 +93,7 @@ One of the reasons that the same algorithms do not perform very well on the imag
 
 ## Hyperparameter Changes
 
-The exponential scheduler for the value of $$\epsilon$$ was found to have the most impact on training. Using a scheduler that decays $$\epsilon$$ per time-step (rather than per episode) was very unstable and difficult to tune. Using a scheduler that decays $$\epsilon$$ linearly also did not seem to perform very well. As seen in below figure, increasing the decay rate $$\gamma$$ by a very small amount led to a significant increase in the performance. The model still shows a slow improvement in episode lengths because there is still a small amount of exploration happening ($$\epsilon = 0.05$$). So if we start exploiting without exploring enough, the model might take a really long time to converge (if it doesn't get stuck in a local minima).
+The exponential scheduler for the value of ![formula](https://render.githubusercontent.com/render/math?math=\color{grey}\epsilon) was found to have the most impact on training. Using a scheduler that decays ![formula](https://render.githubusercontent.com/render/math?math=\color{grey}\epsilon) per time-step (rather than per episode) was very unstable and difficult to tune. Using a scheduler that decays ![formula](https://render.githubusercontent.com/render/math?math=\color{grey}\epsilon) linearly also did not seem to perform very well. As seen in below figure, increasing the decay rate ![formula](https://render.githubusercontent.com/render/math?math=\color{grey}\gamma) by a very small amount led to a significant increase in the performance. The model still shows a slow improvement in episode lengths because there is still a small amount of exploration happening (![formula](https://render.githubusercontent.com/render/math?math=\color{grey}\epsilon=0.05)). So if we start exploiting without exploring enough, the model might take a really long time to converge (if it doesn't get stuck in a local minima).
 
 <p align="center">
     <img src="https://raw.githubusercontent.com/smitkiri/deep_q_learning/main/plots/epsilon_decay_dueling_dqn_gamma.png" width="50%" height="50%">
